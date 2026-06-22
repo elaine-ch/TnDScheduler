@@ -40,6 +40,30 @@ Only the newest `/schedule` message in each server is monitored for changed vote
 
 The included `Procfile` runs `worker: npm start`. On Heroku, configure `DISCORD_TOKEN` and optionally `SCHEDULE_WAIT_MS` as config vars. Deploy this as a **worker dyno**, not a web dyno; the bot does not expose an HTTP server. Run command registration during deployment or from a trusted local machine with the production application ID. Do not commit production tokens.
 
+To deploy from the Heroku CLI in Windows PowerShell:
+
+```
+$APP_NAME = "tnd-scheduler"
+heroku git:remote --app $APP_NAME
+git push heroku HEAD:main
+heroku run --app $APP_NAME -- node register-commands.js
+heroku ps:scale web=0 worker=1 --app $APP_NAME
+heroku logs --tail --app $APP_NAME
+```
+
+You do not need to register commands if none of the slash commands have changed.
+
+To stop or restart the bot, run:
+
+```
+heroku ps:scale web=0 worker=0 --app $APP_NAME
+heroku ps:scale web=0 worker=1 --app $APP_NAME
+heroku ps:restart worker --app $APP_NAME
+```
+
+For faster testing on the deployed app, run:
+`heroku config:set SCHEDULE_WAIT_MS="10000" SCHEDULE_USER_THRESHOLD="3" --app $APP_NAME`
+
 ## Discord setup
 
 In the Developer Portal, enable the privileged **Server Members Intent** because username/display-name lookup is used for discussion leaders. **Message Content Intent is not needed** because interaction is through slash commands and reactions.
