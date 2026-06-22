@@ -31,8 +31,10 @@ The server must contain custom emojis named `fri`, `sat`, `sunday`, and `other`,
 3. Run `/schedule` in a channel where the bot can send messages, mention `DndPlayers`, read history, and add reactions.
 4. Have three distinct non-bot users select one or more valid reactions. Each user counts once toward the threshold, while each selected option counts as a vote. Override this with `SCHEDULE_USER_THRESHOLD` if needed.
 5. After the configured delay, verify that a Friday/Saturday/Sunday result starts a time vote, `Other` appoints a discussion leader, and `Not Coming` produces no follow-up.
+6. After the first result, change reactions on the latest `/schedule` message so a different option wins. After another configured delay, the bot recalculates the live votes, announces that the majority changed, and then sends the corresponding updated time vote or `Other` message.
+7. If a changed vote produces a top tie that includes the previously announced result, the previous result remains active and no change message is sent.
 
-The discussion-leader list and active vote timers are in memory and reset whenever the bot restarts.
+Only the newest `/schedule` message in each server is monitored for changed votes. It remains active through any number of majority changes, regardless of other time-vote or discussion messages sent afterward. The discussion-leader list and active vote timers are in memory and reset whenever the bot restarts.
 
 ## Heroku
 

@@ -55,9 +55,10 @@ const TIME_EMOJIS = {
 // Initial entries are usernames; newly added users are stored by Discord ID.
 const usersList = ['arlo37', 'citrus_bear', 'bkash_', 'mo7hb4e', 'croster'];
 
-// messageId -> { message, emojiOptions, timerStarted, checkingThreshold }
-// Active votes and their timers are also intentionally in-memory only.
+// Active votes and their timers are intentionally in-memory only. Only the most
+// recent /schedule message in each guild remains active.
 const activeDayVotes = new Map();
+const latestDayVotesByGuild = new Map();
 
 function resolveCustomEmojis(guild, definitions) {
   const resolved = {};
@@ -131,6 +132,7 @@ async function sendDayVote(interaction) {
   const message = await channel.send({
     content: [
       `${role} What day should DnD be?`,
+      `Note: You are REQUIRED to vote otherwise scheduling cannot proceed`,
       '',
       `React with ${emojis.friday.display} for Friday`,
       `React with ${emojis.saturday.display} for Saturday`,
@@ -141,12 +143,26 @@ async function sendDayVote(interaction) {
     allowedMentions: { roles: [role.id] },
   });
 
-  activeDayVotes.set(message.id, {
+  const previousVote = latestDayVotesByGuild.get(guild.id);
+  if (previousVote) {
+    clearTimeout(previousVote.initialTimer);
+    clearTimeout(previousVote.updateTimer);
+    activeDayVotes.delete(previousVote.message.id);
+  }
+
+  const vote = {
     message,
     emojiOptions: emojis,
-    timerStarted: false,
-    checkingThreshold: false,
-  });
+    initialTimer: null,
+    updateTimer: null,
+    initialResolved: false,
+    lastWinner: null,
+    checkingVote: false,
+    recheckRequested: false,
+  };
+
+  activeDayVotes.set(message.id, vote);
+  latestDayVotesByGuild.set(guild.id, vote);
   await addReactions(message, emojis);
   return message;
 }
@@ -174,11 +190,18 @@ async function collectReactionData(message, emojiOptions) {
   return { distinctUserIds, totals };
 }
 
-function determineWinningDay(totals) {
+function determineWinningDay(totals, previousWinner = null) {
   const highestVoteCount = Math.max(...Object.values(totals));
   if (highestVoteCount === 0) return null;
 
   const tied = Object.keys(totals).filter((key) => totals[key] === highestVoteCount);
+
+  // Once a result has been announced, a top tie that includes that result does
+  // not count as a changed majority. This avoids replacing the previous result
+  // solely because of the normal tie-breaking priority.
+  if (tied.length > 1 && previousWinner && tied.includes(previousWinner)) {
+    return previousWinner;
+  }
 
   // Explicit tie rules: Other beats a day; later weekend days beat earlier ones.
   // For otherwise unspecified ties, Not Coming wins so the bot does not schedule
@@ -212,51 +235,131 @@ async function selectDiscussionLeader(guild) {
   return { mention: member ? `<@${member.id}>` : entry };
 }
 
-async function finishDayVote(vote) {
-  try {
-    const message = await vote.message.fetch();
-    const { totals } = await collectReactionData(message, vote.emojiOptions);
-    const winner = determineWinningDay(totals);
+function isLatestDayVote(vote) {
+  return latestDayVotesByGuild.get(vote.message.guild.id) === vote;
+}
 
-    if (!winner || winner === 'notComing') return;
+async function publishDayVoteResult(vote, winner, isUpdate = false) {
+  if (!winner) return;
 
-    if (winner === 'other') {
-      const leader = await selectDiscussionLeader(message.guild);
-      await message.channel.send({
-        content: `The majority of votes have been on 'Other.' ${leader.mention}, you are now the discussion leader! Once a day has been decided, use the /time command followed by the day D&D should take place.`,
-        allowedMentions: { users: leader.mention.startsWith('<@') ? [leader.mention.slice(2, -1)] : [] },
-      });
-      return;
-    }
+  const message = await vote.message.fetch();
 
+  if (isUpdate) {
+    const winnerLabels = {
+      friday: 'Friday',
+      saturday: 'Saturday',
+      sunday: 'Sunday',
+      other: 'Other',
+      notComing: 'Not Coming',
+    };
+    await message.channel.send(`The votes have changed! The majority wants ${winnerLabels[winner]}.`);
+  }
+
+  if (winner === 'notComing') {
+    vote.lastWinner = winner;
+    return;
+  }
+
+  if (winner === 'other') {
+    const leader = await selectDiscussionLeader(message.guild);
+    await message.channel.send({
+      content: `The majority of votes have been on 'Other.' ${leader.mention}, you are now the discussion leader! Once a day has been decided, use the /time command followed by the day D&D should take place.`,
+      allowedMentions: { users: leader.mention.startsWith('<@') ? [leader.mention.slice(2, -1)] : [] },
+    });
+  } else {
     const day = winner.charAt(0).toUpperCase() + winner.slice(1);
     await sendTimeVote(message.channel, message.guild, day);
+  }
+
+  vote.lastWinner = winner;
+}
+
+async function resolveInitialDayVote(vote) {
+  try {
+    if (!isLatestDayVote(vote)) return;
+
+    const message = await vote.message.fetch();
+    const { totals } = await collectReactionData(message, vote.emojiOptions);
+    const winner = determineWinningDay(totals, vote.lastWinner);
+
+    vote.initialResolved = true;
+    await publishDayVoteResult(vote, winner);
   } catch (error) {
     console.error(`Could not finish day vote ${vote.message.id}:`, error);
     await vote.message.channel.send(`Could not finish the schedule vote: ${error.message}`).catch(console.error);
   } finally {
-    activeDayVotes.delete(vote.message.id);
+    vote.initialTimer = null;
+    if (isLatestDayVote(vote)) {
+      checkDayVote(vote).catch((error) => console.error('Could not recheck the initial day vote:', error));
+    }
   }
 }
 
-async function checkDayVoteThreshold(vote) {
-  if (vote.timerStarted || vote.checkingThreshold) return;
-
-  vote.checkingThreshold = true;
-
+async function resolveUpdatedDayVote(vote) {
   try {
-    const { distinctUserIds } = await collectReactionData(vote.message, vote.emojiOptions);
+    if (!isLatestDayVote(vote)) return;
+
+    const message = await vote.message.fetch();
+    const { distinctUserIds, totals } = await collectReactionData(message, vote.emojiOptions);
     if (distinctUserIds.size < scheduleUserThreshold) return;
 
-    vote.timerStarted = true;
+    const winner = determineWinningDay(totals, vote.lastWinner);
+    if (!winner || winner === vote.lastWinner) return;
 
-    // The countdown starts once the configured number of distinct non-bot users
-    // have voted. It defaults to three for testing.
-    // Set SCHEDULE_WAIT_MS to a smaller value (for example, 10000 for 10 seconds)
-    // while manually testing. The final totals are read when this timer expires.
-    setTimeout(() => finishDayVote(vote), scheduleWaitMs);
+    await publishDayVoteResult(vote, winner, true);
+  } catch (error) {
+    console.error(`Could not update day vote ${vote.message.id}:`, error);
+    await vote.message.channel.send(`Could not update the schedule vote: ${error.message}`).catch(console.error);
   } finally {
-    vote.checkingThreshold = false;
+    vote.updateTimer = null;
+    if (isLatestDayVote(vote)) {
+      checkDayVote(vote).catch((error) => console.error('Could not recheck the updated day vote:', error));
+    }
+  }
+}
+
+async function evaluateDayVote(vote) {
+  const message = await vote.message.fetch();
+  const { distinctUserIds, totals } = await collectReactionData(message, vote.emojiOptions);
+  if (distinctUserIds.size < scheduleUserThreshold) return;
+
+  if (!vote.initialResolved) {
+    if (vote.initialTimer) return;
+
+    // The initial countdown starts once the configured number of distinct
+    // non-bot users have voted.
+    vote.initialTimer = setTimeout(() => resolveInitialDayVote(vote), scheduleWaitMs);
+    return;
+  }
+
+  const winner = determineWinningDay(totals, vote.lastWinner);
+  if (!winner || winner === vote.lastWinner || vote.updateTimer) return;
+
+  // Set SCHEDULE_WAIT_MS to a smaller value (for example, 10000 for 10 seconds)
+  // while testing. The current majority is recalculated when the timer expires,
+  // so users may continue changing their reactions during the waiting period.
+  vote.updateTimer = setTimeout(() => resolveUpdatedDayVote(vote), scheduleWaitMs);
+}
+
+async function checkDayVote(vote) {
+  if (!isLatestDayVote(vote)) return;
+
+  if (vote.checkingVote) {
+    // Changing a selection normally emits a remove and an add event close
+    // together. Never discard the second event while an API recount is active.
+    vote.recheckRequested = true;
+    return;
+  }
+
+  vote.checkingVote = true;
+
+  try {
+    do {
+      vote.recheckRequested = false;
+      await evaluateDayVote(vote);
+    } while (vote.recheckRequested && isLatestDayVote(vote));
+  } finally {
+    vote.checkingVote = false;
   }
 }
 
@@ -343,17 +446,19 @@ client.on(Events.InteractionCreate, async (interaction) => {
   }
 });
 
-client.on(Events.MessageReactionAdd, async (reaction, user) => {
+async function handleDayVoteReactionChange(reaction, user) {
   if (user.bot) return;
 
   try {
-    if (reaction.partial) await reaction.fetch();
     const vote = activeDayVotes.get(reaction.message.id);
     if (!vote || !findOptionKey(reaction.emoji, vote.emojiOptions)) return;
-    await checkDayVoteThreshold(vote);
+    await checkDayVote(vote);
   } catch (error) {
-    console.error('Could not process a schedule reaction:', error);
+    console.error('Could not process a schedule reaction change:', error);
   }
-});
+}
+
+client.on(Events.MessageReactionAdd, handleDayVoteReactionChange);
+client.on(Events.MessageReactionRemove, handleDayVoteReactionChange);
 
 client.login(token);
