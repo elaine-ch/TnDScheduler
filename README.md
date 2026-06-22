@@ -4,7 +4,7 @@ A Discord.js v14 bot that schedules D&D sessions with slash commands and reactio
 
 ## Configuration
 
-The existing `config.json` token is supported. For local slash-command registration, add the bot application ID as `clientId`. Add a test server ID as `guildId` for immediate guild-only command updates. `config.example.json` shows the supported fields; keep the real `config.json` private because it is ignored by Git.
+The existing `config.json` token is supported locally but the file is optional. For local slash-command registration, add the bot application ID as `clientId`. Add a test server ID as `guildId` for immediate guild-only command updates. Keep the real `config.json` private because it is ignored by Git; Heroku uses environment config vars instead.
 
 ```json
 {

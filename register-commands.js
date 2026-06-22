@@ -1,5 +1,12 @@
 const { REST, Routes, SlashCommandBuilder } = require('discord.js');
-const config = require('./config.json');
+
+let config = {};
+try {
+  // config.json is convenient locally but intentionally not deployed to Heroku.
+  config = require('./config.json');
+} catch (error) {
+  if (error.code !== 'MODULE_NOT_FOUND') throw error;
+}
 
 const token = process.env.DISCORD_TOKEN || config.token;
 const clientId = process.env.DISCORD_CLIENT_ID || config.clientId;
