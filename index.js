@@ -139,7 +139,7 @@ async function sendDayVote(interaction) {
   const message = await channel.send({
     content: [
       `${role} What day should DnD be?`,
-      `Note: You are REQUIRED to vote otherwise scheduling cannot proceed.`,
+      `Note: You are REQUIRED to vote as scheduling will not proceed until there are ${scheduleUserThreshold} votes.`,
       '',
       `React with ${emojis.friday.display} for Friday`,
       `React with ${emojis.saturday.display} for Saturday`,
