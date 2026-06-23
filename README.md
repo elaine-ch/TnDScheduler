@@ -64,6 +64,29 @@ heroku ps:restart worker --app $APP_NAME
 For faster testing on the deployed app, run:
 `heroku config:set SCHEDULE_WAIT_MS="10000" SCHEDULE_USER_THRESHOLD="3" --app $APP_NAME`
 
+## Google Cloud VM
+
+Set up the VM according to these instructions [https://jacobpadilla.com/writing/simple-monitoring-and-alerting](https://jacobpadilla.com/writing/simple-monitoring-and-alerting) up until adding the network tags. Then SSH into the VM and run:
+
+```
+sudo apt update
+sudo apt install -y git curl
+curl -fsSL https://deb.nodesource.com/setup_24.x | sudo -E bash -
+sudo apt install -y nodejs
+sudo npm install -g pm2
+git clone https://github.com/elaine-ch/TnDScheduler.git
+cd TnDScheduler
+nano config.json
+```
+
+Then add the bot token and IDs to the config.json. Afterwards, start the bot with:
+
+```
+npm install
+npm run register
+pm2 start npm --name tnd-scheduler -- start
+```
+
 ## Discord setup
 
 In the Developer Portal, enable the privileged **Server Members Intent** because username/display-name lookup is used for discussion leaders. **Message Content Intent is not needed** because interaction is through slash commands and reactions.
