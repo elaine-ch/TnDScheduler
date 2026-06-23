@@ -58,6 +58,10 @@ const TIME_EMOJIS = {
   other: { unicode: '🇴' },
 };
 
+const NOT_COMING_RESULT_EMOJIS = {
+  dispear: { customName: 'dispear' },
+};
+
 // In-memory only: changes made with /adduser and /removeuser reset on restart.
 // Initial entries are usernames; newly added users are stored by Discord ID.
 const usersList = ['arlo37', 'citrus_bear', 'bkash_', 'mo7hb4e', 'croster'];
@@ -263,6 +267,8 @@ async function publishDayVoteResult(vote, winner, isUpdate = false) {
   }
 
   if (winner === 'notComing') {
+    const emojis = resolveCustomEmojis(message.guild, NOT_COMING_RESULT_EMOJIS);
+    await message.channel.send(emojis.dispear.display);
     vote.lastWinner = winner;
     return;
   }
