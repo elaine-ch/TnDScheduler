@@ -17,7 +17,7 @@ const token = process.env.DISCORD_TOKEN || config.token;
 const scheduleWaitMs = Number(
   process.env.SCHEDULE_WAIT_MS ?? config.scheduleWaitMs ?? 60 * 60 * 1000,
 );
-const scheduleUserThreshold = Number(
+let scheduleUserThreshold = Number(
   process.env.SCHEDULE_USER_THRESHOLD ?? config.scheduleUserThreshold ?? 3,
 );
 
@@ -292,7 +292,9 @@ async function resolveInitialDayVote(vote) {
     if (!isLatestDayVote(vote)) return;
 
     const message = await vote.message.fetch();
-    const { totals } = await collectReactionData(message, vote.emojiOptions);
+    const { distinctUserIds, totals } = await collectReactionData(message, vote.emojiOptions);
+    if (distinctUserIds.size < scheduleUserThreshold) return;
+
     const winner = determineWinningDay(totals, vote.lastWinner);
 
     vote.initialResolved = true;
@@ -380,6 +382,33 @@ function displayUserListEntry(entry) {
   return /^\d{17,20}$/.test(entry) ? `<@${entry}>` : entry;
 }
 
+function formatDiscussionLeaderList() {
+  if (usersList.length === 0) {
+    return 'The discussion-leader list is currently empty.';
+  }
+
+  return [
+    '**Discussion-leader list**',
+    ...usersList.map((entry, index) => `${index + 1}. ${displayUserListEntry(entry)}`),
+  ].join('\n');
+}
+
+function recheckVotesAfterThresholdChange() {
+  for (const vote of latestDayVotesByGuild.values()) {
+    if (vote.initialTimer) {
+      clearTimeout(vote.initialTimer);
+      vote.initialTimer = null;
+    }
+
+    if (vote.updateTimer) {
+      clearTimeout(vote.updateTimer);
+      vote.updateTimer = null;
+    }
+
+    checkDayVote(vote).catch((error) => console.error('Could not recheck vote after threshold change:', error));
+  }
+}
+
 client.once(Events.ClientReady, (readyClient) => {
   console.log(`Ready as ${readyClient.user.tag}`);
 });
@@ -435,6 +464,33 @@ client.on(Events.InteractionCreate, async (interaction) => {
       return;
     }
 
+    if (interaction.commandName === 'listusers') {
+      await interaction.reply({
+        content: formatDiscussionLeaderList(),
+        ephemeral: true,
+        allowedMentions: { users: [] },
+      });
+      return;
+    }
+
+    if (interaction.commandName === 'setthreshold') {
+      const threshold = interaction.options.getInteger('threshold', true);
+      if (!Number.isInteger(threshold) || threshold < 1) {
+        await interaction.reply({ content: 'Threshold must be a positive whole number.', ephemeral: true });
+        return;
+      }
+
+      scheduleUserThreshold = threshold;
+
+      await interaction.reply({
+        content: `Schedule user threshold set to ${scheduleUserThreshold}. This in-memory setting will reset when the bot restarts unless you also update config.json or SCHEDULE_USER_THRESHOLD.`,
+        ephemeral: true,
+      });
+
+      recheckVotesAfterThresholdChange();
+      return;
+    }
+
     if (interaction.commandName === 'help') {
       await interaction.reply({
         content: [
@@ -443,6 +499,8 @@ client.on(Events.InteractionCreate, async (interaction) => {
           '`/time <day>` - manually starts a time vote for a chosen day.',
           '`/adduser <user>` - adds a user to the discussion-leader list.',
           '`/removeuser <user>` - removes a user from the discussion-leader list.',
+          '`/listusers` - lists the discussion-leader list.',
+          '`/setthreshold <threshold>` - sets the schedule user threshold until restart.',
           '`/help` - shows this command list.',
         ].join('\n'),
         ephemeral: true,

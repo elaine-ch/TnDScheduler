@@ -47,6 +47,17 @@ const commands = [
       .setDescription('The Discord user to remove.')
       .setRequired(true)),
   new SlashCommandBuilder()
+    .setName('listusers')
+    .setDescription('List the discussion-leader users.'),
+  new SlashCommandBuilder()
+    .setName('setthreshold')
+    .setDescription('Set the schedule user threshold until the bot restarts.')
+    .addIntegerOption((option) => option
+      .setName('threshold')
+      .setDescription('The number of distinct non-bot users required before scheduling can proceed.')
+      .setRequired(true)
+      .setMinValue(1)),
+  new SlashCommandBuilder()
     .setName('help')
     .setDescription('Show the D&D Scheduler command list.'),
 ].map((command) => command.toJSON());
